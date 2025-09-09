@@ -1,0 +1,366 @@
+# Senso Workflow Configuration for AI Regulatory Compliance Monitor
+
+workflows:
+  regulatory_processing:
+    name: "Regulatory Processing Pipeline"
+    description: "Complete pipeline for processing new regulatory documents"
+    trigger:
+      type: "event"
+      event: "new_regulation_detected"
+
+    steps:
+      - name: "validate_data"
+        description: "Validate incoming regulation data"
+        tool: "data_validator"
+        params:
+          schema: "regulation_schema"
+          required_fields: ["id", "title", "fullText", "source", "date"]
+        on_error: "retry"
+        retry:
+          attempts: 2
+          delay: 1000
+
+      - name: "store_regulation"
+        description: "Store regulation in Redis cache"
+        tool: "redis_storage"
+        params:
+          operation: "save"
+          check_duplicates: true
+        depends_on: ["validate_data"]
+
+      - name: "ai_analysis"
+        description: "Analyze regulation with Qodo AI"
+        tool: "qodo_analyzer"
+        params:
+          analysis_type: "regulatory_compliance"
+          industry: "oil_and_gas"
+          output_format:
+            summary: true
+            risk_score: true
+            action_items: true
+            affected_parties: true
+        depends_on: ["store_regulation"]
+        retry:
+          attempts: 3
+          delay: 2000
+          backoff: "exponential"
+
+      - name: "risk_assessment"
+        description: "Calculate risk score and priority"
+        tool: "risk_calculator"
+        params:
+          industry: "oil_and_gas"
+          factors:
+            ["compliance_deadline", "penalty_severity", "operational_impact"]
+        depends_on: ["ai_analysis"]
+
+      - name: "update_storage"
+        description: "Update regulation with AI insights"
+        tool: "redis_storage"
+        params:
+          operation: "update"
+          include_analysis: true
+        depends_on: ["risk_assessment"]
+
+      - name: "high_priority_check"
+        description: "Check if regulation requires immediate attention"
+        tool: "priority_filter"
+        params:
+          threshold: "high"
+        depends_on: ["risk_assessment"]
+
+      - name: "slack_notification"
+        description: "Send Slack alert for high priority regulations"
+        tool: "slack_notifier"
+        params:
+          type: "regulation"
+          channel: "#compliance-alerts"
+          include_actions: true
+        condition: "priority >= 'high'"
+        depends_on: ["high_priority_check"]
+
+      - name: "slack_alert"
+        description: "Send high priority alert with mentions"
+        tool: "slack_notifier"
+        params:
+          type: "alert"
+          mentions: ["U123456789", "U987654321"] # Replace with actual user IDs
+        condition: "priority == 'critical'"
+        depends_on: ["high_priority_check"]
+
+      - name: "dashboard_update"
+        description: "Trigger dashboard refresh"
+        tool: "dashboard_refresh"
+        params:
+          update_type: "new_regulation"
+          broadcast: true
+        depends_on: ["update_storage"]
+
+      - name: "create_action_items"
+        description: "Auto-create action items from compliance checklist"
+        tool: "action_item_creator"
+        params:
+          auto_assign: true
+          default_assignee: "compliance@company.com"
+        condition: "priority >= 'medium'"
+        depends_on: ["update_storage"]
+
+  compliance_reminder:
+    name: "Compliance Deadline Reminder"
+    description: "Send reminders for upcoming compliance deadlines"
+    trigger:
+      type: "schedule"
+      cron: "0 9 * * MON" # Every Monday at 9 AM
+
+    steps:
+      - name: "check_deadlines"
+        description: "Find regulations with upcoming deadlines"
+        tool: "deadline_checker"
+        params:
+          days_ahead: 30
+          statuses: ["new", "analyzed"]
+
+      - name: "send_reminders"
+        description: "Send reminder notifications"
+        tool: "slack_notifier"
+        params:
+          type: "deadline_reminder"
+          channel: "#compliance-reminders"
+        condition: "deadlines.length > 0"
+        depends_on: ["check_deadlines"]
+
+  emergency_regulation_handler:
+    name: "Emergency Regulation Fast Track"
+    description: "Fast-track processing for emergency regulations"
+    trigger:
+      type: "event"
+      event: "emergency_regulation_detected"
+
+    steps:
+      - name: "immediate_validation"
+        description: "Quick validation for emergency regulations"
+        tool: "data_validator"
+        params:
+          quick_mode: true
+        timeout: 5000
+
+      - name: "priority_storage"
+        description: "Store with high priority flag"
+        tool: "redis_storage"
+        params:
+          operation: "save"
+          priority: "critical"
+        depends_on: ["immediate_validation"]
+
+      - name: "urgent_analysis"
+        description: "Priority AI analysis"
+        tool: "qodo_analyzer"
+        params:
+          priority: "emergency"
+          fast_mode: true
+        depends_on: ["priority_storage"]
+        timeout: 15000
+
+      - name: "emergency_alert"
+        description: "Send emergency alert to all stakeholders"
+        tool: "slack_notifier"
+        params:
+          type: "alert"
+          channel: "#emergency-compliance"
+          mentions: ["@channel"]
+        depends_on: ["urgent_analysis"]
+
+      - name: "executive_notification"
+        description: "Notify executive team"
+        tool: "email_notifier"
+        params:
+          recipients:
+            [
+              "ceo@company.com",
+              "coo@company.com",
+              "compliance-director@company.com",
+            ]
+          template: "emergency_regulation"
+        depends_on: ["emergency_alert"]
+
+  system_health_check:
+    name: "System Health Monitoring"
+    description: "Monitor system health and send alerts"
+    trigger:
+      type: "schedule"
+      cron: "*/15 * * * *" # Every 15 minutes
+
+    steps:
+      - name: "check_redis"
+        description: "Check Redis connectivity and performance"
+        tool: "health_checker"
+        params:
+          service: "redis"
+          timeout: 5000
+
+      - name: "check_qodo_api"
+        description: "Check Qodo API availability"
+        tool: "health_checker"
+        params:
+          service: "qodo"
+          timeout: 10000
+
+      - name: "check_slack"
+        description: "Check Slack API connectivity"
+        tool: "health_checker"
+        params:
+          service: "slack"
+          timeout: 5000
+
+      - name: "system_status_notification"
+        description: "Send status notification if issues detected"
+        tool: "slack_notifier"
+        params:
+          type: "system"
+          channel: "#system-alerts"
+        condition: "any_service_down == true"
+        depends_on: ["check_redis", "check_qodo_api", "check_slack"]
+
+tools:
+  data_validator:
+    description: "Validates regulation data structure and completeness"
+    type: "script"
+    command: "node"
+    args: ["src/tools/data-validator.js"]
+    timeout: 10000
+    environment:
+      NODE_ENV: "production"
+
+  redis_storage:
+    description: "Redis storage operations for regulations and action items"
+    type: "script"
+    command: "node"
+    args: ["src/tools/redis-storage.js"]
+    timeout: 15000
+    environment:
+      REDIS_HOST: "${REDIS_HOST:-localhost}"
+      REDIS_PORT: "${REDIS_PORT:-6379}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+
+  qodo_analyzer:
+    description: "Qodo AI analysis integration for regulatory documents"
+    type: "script"
+    command: "node"
+    args: ["src/tools/qodo-analyzer.js"]
+    timeout: 30000
+    environment:
+      QODO_API_KEY: "${QODO_API_KEY}"
+      QODO_API_URL: "${QODO_API_URL:-https://api.qodo.ai}"
+
+  slack_notifier:
+    description: "Slack notification sender for various event types"
+    type: "script"
+    command: "node"
+    args: ["src/tools/slack-notifier.js"]
+    timeout: 10000
+    environment:
+      SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
+      SLACK_DEFAULT_CHANNEL: "${SLACK_DEFAULT_CHANNEL:-#regulatory-updates}"
+      SLACK_ALERT_CHANNEL: "${SLACK_ALERT_CHANNEL:-#compliance-alerts}"
+      DASHBOARD_URL: "${DASHBOARD_URL:-http://localhost:3000}"
+
+  risk_calculator:
+    description: "Risk assessment calculator for regulations"
+    type: "script"
+    command: "node"
+    args: ["src/tools/risk-calculator.js"]
+    timeout: 5000
+
+  priority_filter:
+    description: "Priority filtering and classification logic"
+    type: "script"
+    command: "node"
+    args: ["src/tools/priority-filter.js"]
+    timeout: 5000
+
+  dashboard_refresh:
+    description: "Dashboard update trigger for real-time updates"
+    type: "script"
+    command: "node"
+    args: ["src/tools/dashboard-refresh.js"]
+    timeout: 5000
+
+  deadline_checker:
+    description: "Compliance deadline checker and reminder system"
+    type: "script"
+    command: "node"
+    args: ["src/tools/deadline-checker.js"]
+    timeout: 10000
+
+  action_item_creator:
+    description: "Automatic action item creation from compliance checklists"
+    type: "script"
+    command: "node"
+    args: ["src/tools/action-item-creator.js"]
+    timeout: 10000
+
+  health_checker:
+    description: "System health monitoring for various services"
+    type: "script"
+    command: "node"
+    args: ["src/tools/health-checker.js"]
+    timeout: 15000
+
+  email_notifier:
+    description: "Email notification sender for executive alerts"
+    type: "script"
+    command: "node"
+    args: ["src/tools/email-notifier.js"]
+    timeout: 10000
+    environment:
+      SMTP_HOST: "${SMTP_HOST}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER}"
+      SMTP_PASS: "${SMTP_PASS}"
+
+# Global configuration
+settings:
+  max_concurrent_workflows: 5
+  default_timeout: 30000
+  retry_policy:
+    default_attempts: 3
+    default_delay: 1000
+    max_delay: 30000
+
+  logging:
+    level: "info"
+    format: "json"
+    include_timestamps: true
+
+  notifications:
+    on_workflow_start: false
+    on_workflow_complete: true
+    on_workflow_error: true
+
+  storage:
+    workflow_history_days: 30
+    cleanup_interval: "0 2 * * *" # Daily at 2 AM
+
+# Environment-specific overrides
+environments:
+  development:
+    settings:
+      logging:
+        level: "debug"
+      notifications:
+        on_workflow_start: true
+    tools:
+      qodo_analyzer:
+        environment:
+          QODO_API_URL: "https://api-dev.qodo.ai"
+
+  production:
+    settings:
+      max_concurrent_workflows: 10
+      logging:
+        level: "warn"
+    tools:
+      redis_storage:
+        timeout: 20000
+      qodo_analyzer:
+        timeout: 45000
